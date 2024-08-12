@@ -45,6 +45,7 @@ cmaker {
             "-DANDROID_SUPPORT_FLEXIBLE_PAGE_SIZES=ON",
             "-DANDROID_ALLOW_UNDEFINED_SYMBOLS=ON",
             "-DMODULE_NAME=$moduleId",
+            "-DCMAKE_BUILD_TYPE=MinSizeRel",
             "-DCMAKE_CXX_STANDARD=23",
             "-DCMAKE_C_STANDARD=23",
             "-DCMAKE_INTERPROCEDURAL_OPTIMIZATION=ON",
@@ -111,7 +112,8 @@ afterEvaluate {
                     "DEBUG" to if (buildTypeLowered == "debug") "true" else "false",
                     "SONAME" to moduleId,
                     "SUPPORTED_ABIS" to supportedAbis,
-                    "MIN_SDK" to androidMinSdkVersion.toString()
+                    "MIN_SDK" to androidMinSdkVersion.toString(),
+                    "MODULENAME" to moduleName
                 )
                 filter<ReplaceTokens>("tokens" to tokens)
                 filter<FixCrLfFilter>("eol" to FixCrLfFilter.CrLf.newInstance("lf"))
