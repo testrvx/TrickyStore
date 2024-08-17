@@ -13,6 +13,12 @@ Shamiko (or similar) is also required for the global props changes and root hidi
 
 **All configuration files will take effect immediately.**
 
+## Global mode
+If the `global_mode` file exists in the `/data/adb/tricky_store` directory, the application will be effective for all apps without needing to create the target.txt file.
+
+## Tee broken mode
+If the `tee_broken_mode` file exists in the `/data/adb/tricky_store` directory, all package names in the `target.txt` file will be added to generatePackages, regardless of whether the package name ends with `!`.
+
 ## keybox.xml
 
 format:
