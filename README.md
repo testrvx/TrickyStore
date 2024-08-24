@@ -7,7 +7,7 @@ Shamiko (or similar) is also required for the global props changes and root hidi
 ## Usage
 
 1. Flash this module and reboot.  
-2. For more than DEVICE integrity, put an unrevoked hardware keybox.xml at `/data/adb/tricky_store/keybox.xml` (Optional).  
+2. For more than DEVICE integrity, put an unrevoked hardware keybox.xml at `/data/adb/tricky_store/custom_keybox.xml` (Optional).  
 3. Customize target packages at `/data/adb/tricky_store/target.txt` (Optional).  
 4. Enjoy!  
 

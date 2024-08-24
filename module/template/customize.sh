@@ -102,11 +102,6 @@ if [ ! -d "$CONFIG_DIR" ]; then
   mkdir -p "$CONFIG_DIR"
   touch "$CONFIG_DIR/spoof_build_vars"
 fi
-if [ ! -f "$CONFIG_DIR/keybox.xml" ]; then
-  ui_print "- Adding default software keybox"
-  extract "$ZIPFILE" 'keybox.xml' "$TMPDIR"
-  mv "$TMPDIR/keybox.xml" "$CONFIG_DIR/keybox.xml"
-fi
 if [ ! -f "$CONFIG_DIR/target.txt" ]; then
   ui_print "- Adding default target scope"
   extract "$ZIPFILE" 'target.txt' "$TMPDIR"
