@@ -1,27 +1,47 @@
 package io.github.a13e300.tricky_store
 
 import android.annotation.SuppressLint
-import android.hardware.security.keymint.SecurityLevel
 import android.os.IBinder
 import android.os.Parcel
 import android.os.ServiceManager
-import android.system.keystore2.IKeystoreService
-import android.system.keystore2.KeyDescriptor
-import android.system.keystore2.KeyEntryResponse
+import android.security.Credentials
+import android.security.KeyStore
+import android.security.keymaster.ExportResult
+import android.security.keymaster.KeyCharacteristics
+import android.security.keymaster.KeymasterArguments
+import android.security.keymaster.KeymasterCertificateChain
+import android.security.keymaster.KeymasterDefs
+import android.security.keystore.IKeystoreCertificateChainCallback
+import android.security.keystore.IKeystoreExportKeyCallback
+import android.security.keystore.IKeystoreKeyCharacteristicsCallback
+import android.security.keystore.IKeystoreService
+import android.security.keystore.KeystoreResponse
 import io.github.a13e300.tricky_store.binder.BinderInterceptor
 import io.github.a13e300.tricky_store.keystore.CertHack
-import io.github.a13e300.tricky_store.keystore.Utils
+import java.math.BigInteger
+import java.security.KeyPair
+import java.util.Date
 import kotlin.system.exitProcess
 
 @SuppressLint("BlockedPrivateApi")
 object KeystoreInterceptor : BinderInterceptor() {
-    private val getKeyEntryTransaction =
-        getTransactCode(IKeystoreService.Stub::class.java, "getKeyEntry") // 2
-
+    private val getTransaction =
+        getTransactCode(IKeystoreService.Stub::class.java, "get")
+    private val generateKeyTransaction =
+        getTransactCode(IKeystoreService.Stub::class.java, "generateKey")
+    private val getKeyCharacteristicsTransaction =
+        getTransactCode(IKeystoreService.Stub::class.java, "getKeyCharacteristics")
+    private val exportKeyTransaction =
+        getTransactCode(IKeystoreService.Stub::class.java, "exportKey")
+    private val attestKeyTransaction =
+        getTransactCode(IKeystoreService.Stub::class.java, "attestKey")
     private lateinit var keystore: IBinder
 
-    private var teeInterceptor: SecurityLevelInterceptor? = null
-    private var strongBoxInterceptor: SecurityLevelInterceptor? = null
+    private const val DESCRIPTOR = "android.security.keystore.IKeystoreService"
+
+    private val KeyArguments = HashMap<Key,CertHack.KeyGenParameters>()
+    private val KeyPairs = HashMap<Key, KeyPair>()
+    data class Key(val uid: Int, val alias: String)
 
     override fun onPreTransact(
         target: IBinder,
@@ -31,25 +51,187 @@ object KeystoreInterceptor : BinderInterceptor() {
         callingPid: Int,
         data: Parcel
     ): Result {
-        if (code == getKeyEntryTransaction) {
-            if (CertHack.canHack()) {
-                Logger.d("intercept pre  $target uid=$callingUid pid=$callingPid dataSz=${data.dataSize()}")
-                if (Config.needGenerate(callingUid))
-                    kotlin.runCatching {
-                        data.enforceInterface(IKeystoreService.DESCRIPTOR)
-                        val descriptor =
-                            data.readTypedObject(KeyDescriptor.CREATOR) ?: return@runCatching
-                        val response =
-                            SecurityLevelInterceptor.getKeyResponse(callingUid, descriptor.alias)
-                            ?: return@runCatching
-                        Logger.i("generate key for uid=$callingUid alias=${descriptor.alias}")
-                        val p = Parcel.obtain()
-                        p.writeNoException()
-                        p.writeTypedObject(response, 0)
-                        return OverrideReply(0, p)
+        if (CertHack.canHack()) {
+            if (code == getTransaction) {
+                if(Config.needHack(callingUid)) {
+                    return Continue
+                } else if(Config.needGenerate(callingUid)){
+                    //needn't intercept getTransaction pre because it was stored in keystore
+                    return Skip
+                }
+            } else if(Config.needGenerate(callingUid)){
+                when (code) {
+                    generateKeyTransaction -> {
+                        kotlin.runCatching {
+                            data.enforceInterface(DESCRIPTOR)
+                            val callback = IKeystoreKeyCharacteristicsCallback.Stub.asInterface(data.readStrongBinder())
+                            val alias = data.readString()!!.split("_")[1]
+                            Logger.i("generateKeyTransaction uid $callingUid alias $alias")
+                            val check = data.readInt()
+                            val kma = KeymasterArguments()
+                            val kgp = CertHack.KeyGenParameters()
+                            if(check == 1){
+                                kma.readFromParcel(data)
+
+                                //val no_auth_required = kma.getBoolean(KeymasterDefs.KM_TAG_NO_AUTH_REQUIRED)
+                                kgp.algorithm = kma.getEnum(KeymasterDefs.KM_TAG_ALGORITHM,0)
+                                kgp.keySize = kma.getUnsignedInt(KeymasterDefs.KM_TAG_KEY_SIZE,0).toInt()
+                                kgp.setEcCurveName(kgp.keySize)
+                                kgp.purpose = kma.getEnums(KeymasterDefs.KM_TAG_PURPOSE)
+                                kgp.digest = kma.getEnums(KeymasterDefs.KM_TAG_DIGEST)
+                                kgp.certificateNotBefore = kma.getDate(KeymasterDefs.KM_TAG_ACTIVE_DATETIME, Date())
+                                if(kgp.algorithm == KeymasterDefs.KM_ALGORITHM_RSA){
+                                    try {
+                                        val getArgumentByTag = KeymasterArguments::class.java.getDeclaredMethods().first{ it.name == "getArgumentByTag" }
+                                        getArgumentByTag.isAccessible = true
+                                        val rsaArgument = getArgumentByTag.invoke(kma, KeymasterDefs.KM_TAG_RSA_PUBLIC_EXPONENT)
+
+                                        val getLongTagValue = KeymasterArguments::class.java.getDeclaredMethods().first{ it.name == "getLongTagValue" }
+                                        getLongTagValue.isAccessible = true
+                                        kgp.rsaPublicExponent = getLongTagValue.invoke(kma, rsaArgument) as BigInteger
+                                    } catch (ex : Exception){
+                                        Logger.e("Read rsaPublicExponent error", ex)
+                                    }
+                                }
+                                KeyArguments[Key(callingUid, alias)] = kgp
+                            }
+                            //val entropy = data.createByteArray()
+                            //val uid = data.readInt()
+                            //val flags = data.readInt()
+
+                            val kc = KeyCharacteristics()
+                            kc.swEnforced = KeymasterArguments()
+                            kc.hwEnforced = kma
+
+                            val ksrP = Parcel.obtain()
+                            ksrP.writeInt(KeyStore.NO_ERROR)
+                            ksrP.writeString("")
+                            ksrP.setDataPosition(0)
+                            val ksr = KeystoreResponse.CREATOR.createFromParcel(ksrP)
+                            ksrP.recycle()
+                            callback.onFinished(ksr, kc)
+
+                            val p = Parcel.obtain()
+                            p.writeNoException()
+                            p.writeInt(KeyStore.NO_ERROR)
+                            return OverrideReply(0, p)
+                        }.onFailure {
+                            Logger.e("generateKeyTransaction error", it)
+                        }
                     }
-                else if (Config.needHack(callingUid)) return Continue
-                return Skip
+                    getKeyCharacteristicsTransaction -> {
+                        kotlin.runCatching {
+                            data.enforceInterface(DESCRIPTOR)
+                            val callback = IKeystoreKeyCharacteristicsCallback.Stub.asInterface(data.readStrongBinder())
+                            val alias = data.readString()!!.split("_")[1]
+                            Logger.i("getKeyCharacteristicsTransaction uid $callingUid alias $alias")
+            //                        var check = data.readInt()
+            //                        if(check == 1){
+            //                            data.createByteArray()
+            //                        }
+            //                        check = data.readInt()
+            //                        if(check == 1){
+            //                            data.createByteArray()
+            //                        }
+            //                        val uid = data.readInt()
+
+                            val kc = KeyCharacteristics()
+                            val kma = KeymasterArguments()
+                            kma.addEnum(KeymasterDefs.KM_TAG_ALGORITHM, KeyArguments[Key(callingUid, alias)]!!.algorithm)
+                            kc.swEnforced = KeymasterArguments()
+                            kc.hwEnforced = kma
+
+                            val ksrP = Parcel.obtain()
+                            ksrP.writeInt(KeyStore.NO_ERROR)
+                            ksrP.writeString("")
+                            ksrP.setDataPosition(0)
+                            val ksr = KeystoreResponse.CREATOR.createFromParcel(ksrP)
+                            ksrP.recycle()
+
+                            callback.onFinished(ksr, kc)
+
+                            val p = Parcel.obtain()
+                            p.writeNoException()
+                            p.writeInt(KeyStore.NO_ERROR)
+                            return OverrideReply(0, p)
+                        }.onFailure {
+                            Logger.e("getKeyCharacteristicsTransaction error", it)
+                        }
+                    }
+                    exportKeyTransaction -> {
+                        kotlin.runCatching {
+                            data.enforceInterface(DESCRIPTOR)
+                            val callback = IKeystoreExportKeyCallback.Stub.asInterface(data.readStrongBinder())
+                            val alias = data.readString()!!.split("_")[1]
+                            Logger.i("exportKeyTransaction uid $callingUid alias $alias")
+            //                        val format = data.readInt()
+            //                        var check = data.readInt()
+            //                        if(check == 1){
+            //                            data.createByteArray()
+            //                        }
+            //                        check = data.readInt()
+            //                        if(check == 1){
+            //                            data.createByteArray()
+            //                        }
+            //                        val uid = data.readInt()
+
+                            val kp = CertHack.generateKeyPair(KeyArguments[Key(callingUid, alias)])
+                            KeyPairs[Key(callingUid,alias)] = kp
+
+                            val erP = Parcel.obtain()
+                            erP.writeInt(KeyStore.NO_ERROR)
+                            erP.writeByteArray(kp.public.encoded)
+                            erP.setDataPosition(0)
+                            val er = ExportResult.CREATOR.createFromParcel(erP)
+                            erP.recycle()
+
+                            callback.onFinished(er)
+
+                            val p = Parcel.obtain()
+                            p.writeNoException()
+                            p.writeInt(KeyStore.NO_ERROR)
+                            return OverrideReply(0, p)
+                        }.onFailure {
+                            Logger.e("exportKeyTransaction error", it)
+                        }
+                    }
+                    attestKeyTransaction -> {
+                        kotlin.runCatching {
+                            data.enforceInterface(DESCRIPTOR)
+                            val callback = IKeystoreCertificateChainCallback.Stub.asInterface(data.readStrongBinder())
+                            val alias = data.readString()!!.split("_")[1]
+                            Logger.i("attestKeyTransaction uid $callingUid alias $alias")
+                            val check = data.readInt()
+                            val kma = KeymasterArguments()
+                            if(check == 1){
+                                kma.readFromParcel(data)
+                                val attestationChallenge = kma.getBytes(KeymasterDefs.KM_TAG_ATTESTATION_CHALLENGE,ByteArray(0))
+
+                                val ksrP = Parcel.obtain()
+                                ksrP.writeInt(KeyStore.NO_ERROR)
+                                ksrP.writeString("")
+                                ksrP.setDataPosition(0)
+                                val ksr = KeystoreResponse.CREATOR.createFromParcel(ksrP)
+                                ksrP.recycle()
+
+                                val key = Key(callingUid, alias)
+                                val ka = KeyArguments[key]!!
+                                ka.attestationChallenge = attestationChallenge
+                                val chain = CertHack.generateChain(callingUid, ka, KeyPairs[key])
+
+                                val kcc = KeymasterCertificateChain(chain)
+                                callback.onFinished(ksr,kcc)
+                            }
+
+                            val p = Parcel.obtain()
+                            p.writeNoException()
+                            p.writeInt(KeyStore.NO_ERROR)
+                            return OverrideReply(0, p)
+                        }.onFailure {
+                            Logger.e("attestKeyTransaction error", it)
+                        }
+                    }
+                }
             }
         }
         return Skip
@@ -65,23 +247,27 @@ object KeystoreInterceptor : BinderInterceptor() {
         reply: Parcel?,
         resultCode: Int
     ): Result {
-        if (target != keystore || code != getKeyEntryTransaction || reply == null) return Skip
+        if (target != keystore || code != getTransaction || reply == null) return Skip
         if (kotlin.runCatching { reply.readException() }.exceptionOrNull() != null) return Skip
         val p = Parcel.obtain()
         Logger.d("intercept post $target uid=$callingUid pid=$callingPid dataSz=${data.dataSize()} replySz=${reply.dataSize()}")
         try {
-            val response = reply.readTypedObject(KeyEntryResponse.CREATOR)
-            val chain = Utils.getCertificateChain(response)
-            if (chain != null) {
-                val newChain = CertHack.hackCertificateChain(chain)
-                Utils.putCertificateChain(response, newChain)
-                Logger.i("hacked cert of uid=$callingUid")
+            data.enforceInterface(DESCRIPTOR)
+            val alias = data.readString() ?: ""
+            var response = reply.createByteArray()
+            if (alias.startsWith(Credentials.USER_CERTIFICATE)) {
+                response = CertHack.hackCertificateChainUSR(response, alias.split("_")[1], callingUid)
+                Logger.i("hacked leaf of uid=$callingUid")
                 p.writeNoException()
-                p.writeTypedObject(response, 0)
+                p.writeByteArray(response)
                 return OverrideReply(0, p)
-            } else {
-                p.recycle()
-            }
+            } else if(alias.startsWith(Credentials.CA_CERTIFICATE)){
+                response = CertHack.hackCertificateChainCA(response, alias.split("_")[1], callingUid)
+                Logger.i("hacked caList of uid=$callingUid")
+                p.writeNoException()
+                p.writeByteArray(response)
+                return OverrideReply(0, p)
+            } else p.recycle()
         } catch (t: Throwable) {
             Logger.e("failed to hack certificate chain of uid=$callingUid pid=$callingPid!", t)
             p.recycle()
@@ -94,7 +280,7 @@ object KeystoreInterceptor : BinderInterceptor() {
 
     fun tryRunKeystoreInterceptor(): Boolean {
         Logger.i("trying to register keystore interceptor ($triedCount) ...")
-        val b = ServiceManager.getService("android.system.keystore2.IKeystoreService/default") ?: return false
+        val b = ServiceManager.getService("android.security.keystore") ?: return false
         val bd = getBinderBackdoor(b)
         if (bd == null) {
             // no binder hook, try inject
@@ -108,7 +294,7 @@ object KeystoreInterceptor : BinderInterceptor() {
                     arrayOf(
                         "/system/bin/sh",
                         "-c",
-                        "exec ./inject `pidof keystore2` libtricky_store.so entry"
+                        "exec ./inject `pidof keystore` libtricky_store.so entry"
                     )
                 )
                 // logD(p.inputStream.readBytes().decodeToString())
@@ -122,31 +308,10 @@ object KeystoreInterceptor : BinderInterceptor() {
             triedCount += 1
             return false
         }
-        val ks = IKeystoreService.Stub.asInterface(b)
-        val tee = kotlin.runCatching { ks.getSecurityLevel(SecurityLevel.TRUSTED_ENVIRONMENT) }
-            .getOrNull()
-        val strongBox =
-            kotlin.runCatching { ks.getSecurityLevel(SecurityLevel.STRONGBOX) }.getOrNull()
         keystore = b
         Logger.i("register for Keystore $keystore!")
         registerBinderInterceptor(bd, b, this)
         keystore.linkToDeath(Killer, 0)
-        if (tee != null) {
-            Logger.i("register for TEE SecurityLevel $tee!")
-            val interceptor = SecurityLevelInterceptor(tee, SecurityLevel.TRUSTED_ENVIRONMENT)
-            registerBinderInterceptor(bd, tee.asBinder(), interceptor)
-            teeInterceptor = interceptor
-        } else {
-            Logger.i("no TEE SecurityLevel found!")
-        }
-        if (strongBox != null) {
-            Logger.i("register for StrongBox SecurityLevel $tee!")
-            val interceptor = SecurityLevelInterceptor(strongBox, SecurityLevel.STRONGBOX)
-            registerBinderInterceptor(bd, strongBox.asBinder(), interceptor)
-            strongBoxInterceptor = interceptor
-        } else {
-            Logger.i("no StrongBox SecurityLevel found!")
-        }
         return true
     }
 

@@ -31,7 +31,7 @@ val verCode by extra(gitCommitCount)
 val commitHash by extra(gitCommitHash)
 val abiList by extra(listOf("arm64-v8a", "x86_64", "armeabi-v7a"))
 
-val androidMinSdkVersion by extra(31)
+val androidMinSdkVersion by extra(29)
 val androidTargetSdkVersion by extra(34)
 val androidCompileSdkVersion by extra(34)
 val androidBuildToolsVersion by extra("34.0.0")
