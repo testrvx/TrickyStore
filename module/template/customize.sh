@@ -111,3 +111,7 @@ if [ ! -f "$CONFIG_DIR/target.txt" ]; then
   extract "$ZIPFILE" 'target.txt' "$TMPDIR"
   mv "$TMPDIR/target.txt" "$CONFIG_DIR/target.txt"
 fi
+if [ -d "/data/adb/modules/playintegrityfix" ]; then
+  ui_print "- PIF module will be removed on next reboot"
+  touch "/data/adb/modules/playintegrityfix/remove"
+fi
