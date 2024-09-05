@@ -101,11 +101,7 @@ if [ ! -d "$CONFIG_DIR" ]; then
   ui_print "- Creating configuration directory"
   mkdir -p "$CONFIG_DIR"
   touch "$CONFIG_DIR/spoof_build_vars"
-fi
-if [ ! -f "$CONFIG_DIR/target.txt" ]; then
-  ui_print "- Adding default target scope"
-  extract "$ZIPFILE" 'target.txt' "$TMPDIR"
-  mv "$TMPDIR/target.txt" "$CONFIG_DIR/target.txt"
+  touch "$CONFIG_DIR/global_mode"
 fi
 if [ -d "/data/adb/modules/playintegrityfix" ]; then
   ui_print "- PIF module will be removed on next reboot"
