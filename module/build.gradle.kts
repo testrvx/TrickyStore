@@ -45,7 +45,7 @@ cmaker {
             "-DANDROID_SUPPORT_FLEXIBLE_PAGE_SIZES=ON",
             "-DANDROID_ALLOW_UNDEFINED_SYMBOLS=ON",
             "-DMODULE_NAME=$moduleId",
-            "-DCMAKE_BUILD_TYPE=MinSizeRel",
+            "-DCMAKE_BUILD_TYPE=Release",
             "-DCMAKE_CXX_STANDARD=23",
             "-DCMAKE_C_STANDARD=23",
             "-DCMAKE_INTERPROCEDURAL_OPTIMIZATION=ON",
